@@ -1,0 +1,151 @@
+<?php
+
+/**
+ * Measurements generator
+ * Version: 1.0.1
+ * 
+ * @TODO:
+ * - Manual temperature customize (target temperature)
+ */
+
+// Database configuration
+const MYSQL_HOST = 'localhost';
+const MYSQL_PORT = '3306';
+const MYSQL_DBNAME = 'temperatures_generator';
+const MYSQL_USER = 'root';
+const MYSQL_PASSWORD = 'Localhost1';
+const MYSQL_CHARSET = 'utf8mb4';
+
+// Temperature status
+const TEMP_NOT_MOVING = 'TEMP_NOT_MOVING';
+const TEMP_GOING_UP = 'TEMP_GOING_UP';
+const TEMP_GOING_DOWN = 'TEMP_GOING_DOWN';
+const TEMP_GOING_UP_CRITICAL = 'TEMP_GOING_UP_CRITICAL';
+const TEMP_GOING_DOWN_CRITICAL = 'TEMP_GOING_DOWN_CRITICAL';
+
+// Temperatures
+const MIN_TEMP = 35;
+const MAX_TEMP = 60;
+const MIN_TEMP_CRITICAL = 0;
+const MAX_TEMP_CRITICAL = 100;
+
+echo MYSQL_USER . " " . MYSQL_PASSWORD;
+die();
+// PDO init
+$dsn = "mysql:host=".MYSQL_HOST.";dbname=".MYSQL_DBNAME.";charset=".MYSQL_CHARSET;
+
+$options = [
+    PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    PDO::ATTR_EMULATE_PREPARES   => false,
+];
+
+try {
+    $pdo = new PDO($dsn, MYSQL_USER, MYSQL_PASSWORD, $options);
+} catch (\PDOException $e) {
+    throw new \PDOException($e->getMessage(), (int)$e->getCode());
+}
+
+// Get last measurement
+$stmt = $pdo->query('SELECT * FROM temperatures ORDER BY timestamp DESC LIMIT 1');
+$lastMeasurement = $stmt->fetch();
+
+// Get last 5 measurements
+$stmt = $pdo->query('SELECT * FROM temperatures ORDER BY timestamp DESC LIMIT 5');
+$lastMeasurements = $stmt->fetchAll();
+
+// Get new values
+$newStatus = getStatus($lastMeasurement['status'], $lastMeasurement['temperature'], $lastMeasurements);
+$newTemperature = getTemperature($newStatus, $lastMeasurement['temperature'], $lastMeasurement['status']);
+
+// Insert new measurement into db
+$stmt = $pdo->prepare('INSERT INTO temperatures (temperature, status) VALUES (?, ?)');
+$stmt->execute([$newTemperature, $newStatus]);
+
+// Functions
+
+function getTemperature($status, $lastTemperature, $lastStatus) {
+    $temperatureDifference = rand(1, 2);
+    $bigTemperatureDifference = rand(2, 5);
+    $temperature = 0;
+
+    switch ($status) {
+        case TEMP_GOING_UP:
+            $temperature = $lastTemperature += $temperatureDifference;
+            break;
+        case TEMP_GOING_DOWN:
+            $temperature = $lastTemperature -= $temperatureDifference;
+            break;
+        case TEMP_GOING_UP_CRITICAL:
+            $temperature = $lastTemperature += $bigTemperatureDifference;
+            break;
+        case TEMP_GOING_DOWN_CRITICAL:
+            $temperature = $lastTemperature -= $bigTemperatureDifference;
+            break;
+        case TEMP_NOT_MOVING:
+            $temperature = $lastTemperature;
+            break;
+    }
+
+    if ($temperature > MAX_TEMP && $status != TEMP_GOING_UP_CRITICAL && $lastStatus != TEMP_GOING_UP_CRITICAL) {
+        return MAX_TEMP;
+    } elseif ($temperature < MIN_TEMP && $status != TEMP_GOING_DOWN_CRITICAL && $lastStatus != TEMP_GOING_DOWN_CRITICAL) {
+        return MIN_TEMP;
+    }
+
+    if ($temperature > MAX_TEMP_CRITICAL) {
+        return MAX_TEMP_CRITICAL;
+    } elseif ($temperature < MIN_TEMP_CRITICAL) {
+        return MIN_TEMP_CRITICAL;
+    }
+
+    return $temperature;
+}
+
+function getStatus($lastStatus, $lastTemperature, $lastMeasurements): string {
+    $isTempGoingCritical = rand(0, 1);
+
+    $statuses = [
+        TEMP_NOT_MOVING,
+        TEMP_GOING_UP,
+        TEMP_GOING_DOWN,
+        TEMP_GOING_UP_CRITICAL,
+        TEMP_GOING_DOWN_CRITICAL
+    ];
+    $statusesIndex = 0;
+
+    if ($isTempGoingCritical && ($lastStatus == TEMP_NOT_MOVING || $lastStatus == TEMP_GOING_UP || $lastStatus == TEMP_GOING_DOWN)) {
+        $statusesIndex = rand(0, 4);
+    } else {
+        $statusesIndex = rand(0, 2);
+    }
+
+    if ($lastStatus == TEMP_GOING_UP_CRITICAL) {
+        $statusesIndex = 3;
+    } elseif ($lastStatus == TEMP_GOING_DOWN_CRITICAL) {
+        $statusesIndex = 4;
+    }
+
+    if (lastMeasurementsAreCritical($lastMeasurements) && $lastStatus == TEMP_GOING_UP_CRITICAL) {
+        $statusesIndex = 2;
+    } elseif (lastMeasurementsAreCritical($lastMeasurements) && $lastStatus == TEMP_GOING_DOWN_CRITICAL) {
+        $statusesIndex = 1;
+    }
+
+    return $statuses[$statusesIndex];
+}
+
+function lastMeasurementsAreCritical($lastMeasurements) {
+    $upCounter = 0;
+    $downCounter = 0;
+
+    foreach($lastMeasurements as $measurement) {
+        if ($measurement['status'] == TEMP_GOING_UP_CRITICAL && $measurement['temperature'] == MAX_TEMP_CRITICAL)
+            $upCounter += 1;
+
+        if ($measurement['status'] == TEMP_GOING_DOWN_CRITICAL && $measurement['temperature'] == MIN_TEMP_CRITICAL)
+            $downCounter += 1;
+    }
+
+    return $upCounter >= 5 || $downCounter >= 5;
+}
